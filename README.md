@@ -103,7 +103,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-This requires a one-time [PyPI trusted publisher](https://docs.pypi.org/trusted-publishers/) configured for the `sprites-adk` project pointing at `fly-apps/sprites-adk` and workflow `publish.yml`.
+This requires a one-time [PyPI trusted publisher](https://docs.pypi.org/trusted-publishers/) configured for the `sprites-adk` project pointing at `superfly/sprites-adk` and workflow `publish.yml`.
 
 ## Resources
 

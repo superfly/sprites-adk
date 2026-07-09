@@ -31,7 +31,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://sprites.dev"
 Documentation = "https://docs.sprites.dev"
-Repository = "https://github.com/fly-apps/sprites-adk"
+Repository = "https://github.com/superfly/sprites-adk"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

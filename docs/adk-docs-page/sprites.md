@@ -75,5 +75,5 @@ The Sprite is created lazily on first tool use. Named Sprites are get-or-create:
 ## Resources
 
 - [sprites-adk on PyPI](https://pypi.org/project/sprites-adk/)
-- [Source code and examples](https://github.com/fly-apps/sprites-adk)
+- [Source code and examples](https://github.com/superfly/sprites-adk)
 - [Sprites documentation](https://docs.sprites.dev)
