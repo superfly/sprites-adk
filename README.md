@@ -94,6 +94,17 @@ python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
 ```
 
+### Releasing
+
+Publishing to PyPI is automated via [`.github/workflows/publish.yml`](.github/workflows/publish.yml). Push a `vX.Y.Z` tag and the workflow stamps that version into `pyproject.toml` and `sprites_adk/__init__.py`, runs the tests, builds, and publishes via PyPI trusted publishing (OIDC — no API tokens):
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This requires a one-time [PyPI trusted publisher](https://docs.pypi.org/trusted-publishers/) configured for the `sprites-adk` project pointing at `superfly/sprites-adk` and workflow `publish.yml`.
+
 ## Resources
 
 - [Sprites docs](https://docs.sprites.dev)
