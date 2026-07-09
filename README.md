@@ -62,6 +62,8 @@ The Sprite is created lazily on first tool use; constructing the agent needs no 
 
 All tools return structured dicts (`success`, `stdout`/`stderr`/`exit_code`, …); failures come back as `{"success": false, "error": ...}` so the agent can adapt instead of crashing the run.
 
+File reads and writes run as commands inside the Sprite (via `base64`, so quotes/newlines/unicode survive) rather than through a separate filesystem API. That keeps them consistent with everything else the agent does — in particular, files written this way are correctly reverted by `restore_sprite_checkpoint`. `write_file_to_sprite` is capped at 256 KB; generate larger files with a command inside the Sprite. `/tmp` is tmpfs and is not captured by checkpoints.
+
 ### A note on restore
 
 `restore_sprite_checkpoint` rewinds the **whole environment** and permanently discards anything newer than the checkpoint. The tool refuses to run unless `confirm=true` is passed, and its description instructs the model to get explicit user confirmation first.

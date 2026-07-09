@@ -8,7 +8,12 @@ Every tool shares the plugin's single Sprite. Tool bodies are synchronous
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
+import os
+import re
+import shlex
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from google.adk.tools.base_tool import BaseTool
@@ -22,18 +27,42 @@ logger = logging.getLogger("sprites_adk")
 
 _DEFAULT_EXEC_TIMEOUT = 300.0
 
+# Cap on file content passed through the command line (base64 inflates ~1.33x
+# and the whole command must fit in ARG_MAX). Larger files should be produced
+# by commands run inside the Sprite instead.
+_MAX_WRITE_BYTES = 256 * 1024
+
 _LANGUAGE_RUNNERS = {
     "python": ("python3", "-c"),
     "javascript": ("node", "-e"),
     "bash": ("bash", "-c"),
 }
 
+# The synthetic entry list_checkpoints returns for the live working state.
+# It is not a restorable checkpoint, so it is hidden from listings.
+_CURRENT_CHECKPOINT_ID = "Current"
 
-def _decode(data: bytes, limit: int = 100_000) -> str:
+# create_checkpoint streams human-readable progress lines that carry the new
+# checkpoint id, e.g. "  ID: v1" and "Checkpoint v1 created successfully".
+_CHECKPOINT_ID_RE = re.compile(r"\bID:\s*(\S+)")
+_CHECKPOINT_COMPLETE_RE = re.compile(r"Checkpoint\s+(\S+)\s+created", re.IGNORECASE)
+
+
+def _decode(data: Optional[bytes], limit: int = 100_000) -> str:
+    if not data:
+        return ""
     text = data.decode("utf-8", errors="replace")
     if len(text) > limit:
         return text[:limit] + f"\n... [truncated {len(text) - limit} characters]"
     return text
+
+
+def _checkpoint_sort_key(checkpoint):
+    """Newest first: prefer the numeric version suffix (v3 > v2 > v1),
+    falling back to creation time when ids are not versioned."""
+    match = re.search(r"(\d+)$", checkpoint.id or "")
+    version = int(match.group(1)) if match else -1
+    return (version, checkpoint.create_time)
 
 
 class _SpriteTool(BaseTool):
@@ -108,8 +137,8 @@ class ExecuteCommandTool(_SpriteTool):
             timeout=float(args.get("timeout") or _DEFAULT_EXEC_TIMEOUT),
         )
         return {
-            "success": result.exit_code == 0,
-            "exit_code": result.exit_code,
+            "success": result.returncode == 0,
+            "exit_code": result.returncode,
             "stdout": _decode(result.stdout),
             "stderr": _decode(result.stderr),
         }
@@ -174,9 +203,9 @@ class ExecuteCodeTool(_SpriteTool):
             timeout=float(args.get("timeout") or _DEFAULT_EXEC_TIMEOUT),
         )
         return {
-            "success": result.exit_code == 0,
+            "success": result.returncode == 0,
             "language": language,
-            "exit_code": result.exit_code,
+            "exit_code": result.returncode,
             "stdout": _decode(result.stdout),
             "stderr": _decode(result.stderr),
         }
@@ -221,9 +250,30 @@ class WriteFileTool(_SpriteTool):
         content = args.get("content")
         if not path or content is None:
             return {"success": False, "error": "path and content are required"}
+        data = content.encode("utf-8")
+        if len(data) > _MAX_WRITE_BYTES:
+            return {
+                "success": False,
+                "error": (
+                    f"content is {len(data)} bytes; the limit is {_MAX_WRITE_BYTES}. "
+                    "Generate large files with a command run inside the Sprite instead."
+                ),
+            }
+        # Write via exec + base64 rather than the filesystem API: the fs API is
+        # backed by a layer that checkpoint restore does NOT revert, so it can
+        # diverge from what commands see after a rollback. base64 keeps content
+        # (quotes, newlines, unicode) intact through the shell.
+        b64 = base64.b64encode(data).decode("ascii")
+        directory = os.path.dirname(path) or "."
+        command = (
+            f"mkdir -p {shlex.quote(directory)} && "
+            f"printf %s {b64} | base64 -d > {shlex.quote(path)}"
+        )
         sprite = self._plugin.get_sprite()
-        sprite.filesystem("/").path(path).write_text(content, mkdir_parents=True)
-        return {"success": True, "path": path, "bytes_written": len(content.encode("utf-8"))}
+        result = sprite.run("sh", "-c", command, capture_output=True, timeout=_DEFAULT_EXEC_TIMEOUT)
+        if result.returncode != 0:
+            return {"success": False, "error": _decode(result.stderr) or f"write failed for {path}"}
+        return {"success": True, "path": path, "bytes_written": len(data)}
 
 
 class ReadFileTool(_SpriteTool):
@@ -256,9 +306,27 @@ class ReadFileTool(_SpriteTool):
         path = args.get("path", "")
         if not path:
             return {"success": False, "error": "path is required"}
+        # Read via exec (see WriteFileTool) so reads reflect checkpoint restores.
         sprite = self._plugin.get_sprite()
-        content = sprite.filesystem("/").path(path).read_text()
-        return {"success": True, "path": path, "content": content}
+        result = sprite.run("base64", path, capture_output=True, timeout=_DEFAULT_EXEC_TIMEOUT)
+        if result.returncode != 0:
+            detail = _decode(result.stderr).strip()
+            return {
+                "success": False,
+                "error": detail or f"could not read {path} (is it a file that exists?)",
+            }
+        try:
+            raw = base64.b64decode(result.stdout or b"")
+        except binascii.Error as e:
+            return {"success": False, "error": f"could not decode {path}: {e}"}
+        text = raw.decode("utf-8", errors="replace")
+        truncated = len(text) > 100_000
+        return {
+            "success": True,
+            "path": path,
+            "content": text[:100_000] + ("\n... [truncated]" if truncated else ""),
+            "truncated": truncated,
+        }
 
 
 class CreateCheckpointTool(_SpriteTool):
@@ -298,16 +366,20 @@ class CreateCheckpointTool(_SpriteTool):
         comment = args.get("comment") or ""
         sprite = self._plugin.get_sprite()
         errors: List[str] = []
+        checkpoint_id: Optional[str] = None
+        # The new id is reported in the progress stream itself (e.g. "ID: v1").
+        # list_checkpoints is unreliable here: it includes a synthetic
+        # "Current" entry that always looks newest.
         for message in sprite.create_checkpoint(comment):
             if message.type == "error":
                 errors.append(message.error or message.data or "unknown error")
+                continue
+            text = message.data or ""
+            match = _CHECKPOINT_COMPLETE_RE.search(text) or _CHECKPOINT_ID_RE.search(text)
+            if match:
+                checkpoint_id = match.group(1)
         if errors:
             return {"success": False, "error": "; ".join(errors)}
-        checkpoint_id: Optional[str] = None
-        checkpoints = sprite.list_checkpoints()
-        if checkpoints:
-            newest = max(checkpoints, key=lambda c: c.create_time)
-            checkpoint_id = newest.id
         return {"success": True, "checkpoint_id": checkpoint_id, "comment": comment}
 
 
@@ -333,7 +405,9 @@ class ListCheckpointsTool(_SpriteTool):
 
     def _run(self, args: Dict[str, Any]) -> Dict[str, Any]:
         sprite = self._plugin.get_sprite()
-        checkpoints = sorted(sprite.list_checkpoints(), key=lambda c: c.create_time, reverse=True)
+        # Hide the synthetic "Current" live-state entry; it cannot be restored.
+        checkpoints = [c for c in sprite.list_checkpoints() if c.id != _CURRENT_CHECKPOINT_ID]
+        checkpoints.sort(key=_checkpoint_sort_key, reverse=True)
         return {
             "success": True,
             "checkpoints": [

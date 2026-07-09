@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sprites import NotFoundError
-from sprites.types import Checkpoint, ExecResult, StreamMessage
+from sprites.exec import CompletedProcess
+from sprites.types import Checkpoint, StreamMessage
 
 from sprites_adk import SpritesPlugin
+
+
+def completed(returncode=0, stdout=b"", stderr=b""):
+    return CompletedProcess(args=["sh"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def make_plugin(**kwargs):
@@ -138,7 +144,7 @@ def test_on_tool_error_ignores_foreign_tools():
 
 def test_execute_command():
     plugin, sprite = make_plugin_with_sprite()
-    sprite.run.return_value = ExecResult(stdout=b"hello\n", stderr=b"", exit_code=0)
+    sprite.run.return_value = completed(returncode=0, stdout=b"hello\n")
     result = run_tool(tool_by_name(plugin, "execute_command_in_sprite"), {"command": "echo hello"})
     assert result["success"] is True
     assert result["exit_code"] == 0
@@ -150,11 +156,20 @@ def test_execute_command():
 
 def test_execute_command_failure_exit_code():
     plugin, sprite = make_plugin_with_sprite()
-    sprite.run.return_value = ExecResult(stdout=b"", stderr=b"no such file\n", exit_code=1)
+    sprite.run.return_value = completed(returncode=1, stderr=b"no such file\n")
     result = run_tool(tool_by_name(plugin, "execute_command_in_sprite"), {"command": "cat /nope"})
     assert result["success"] is False
     assert result["exit_code"] == 1
     assert "no such file" in result["stderr"]
+
+
+def test_execute_command_handles_none_output():
+    plugin, sprite = make_plugin_with_sprite()
+    sprite.run.return_value = completed(returncode=0, stdout=None, stderr=None)
+    result = run_tool(tool_by_name(plugin, "execute_command_in_sprite"), {"command": "true"})
+    assert result["success"] is True
+    assert result["stdout"] == ""
+    assert result["stderr"] == ""
 
 
 def test_execute_command_requires_command():
@@ -172,7 +187,7 @@ def test_execute_command_exception_becomes_error_dict():
 
 def test_execute_code_python_default():
     plugin, sprite = make_plugin_with_sprite()
-    sprite.run.return_value = ExecResult(stdout=b"4\n", stderr=b"", exit_code=0)
+    sprite.run.return_value = completed(returncode=0, stdout=b"4\n")
     result = run_tool(tool_by_name(plugin, "execute_code_in_sprite"), {"code": "print(2+2)"})
     assert result["success"] is True
     assert result["language"] == "python"
@@ -182,7 +197,7 @@ def test_execute_code_python_default():
 
 def test_execute_code_javascript():
     plugin, sprite = make_plugin_with_sprite()
-    sprite.run.return_value = ExecResult(stdout=b"hi\n", stderr=b"", exit_code=0)
+    sprite.run.return_value = completed(returncode=0, stdout=b"hi\n")
     result = run_tool(
         tool_by_name(plugin, "execute_code_in_sprite"),
         {"code": "console.log('hi')", "language": "javascript"},
@@ -204,23 +219,53 @@ def test_execute_code_rejects_unknown_language():
 # -- files ---------------------------------------------------------------------
 
 
-def test_write_file():
+def test_write_file_uses_exec_base64():
     plugin, sprite = make_plugin_with_sprite()
-    path_mock = sprite.filesystem.return_value.path.return_value
+    sprite.run.return_value = completed(returncode=0)
+    content = "print('hi')\nx = \"quoted\"\n"
     result = run_tool(
         tool_by_name(plugin, "write_file_to_sprite"),
-        {"path": "/app/main.py", "content": "print('hi')"},
+        {"path": "/app/main.py", "content": content},
     )
     assert result["success"] is True
-    assert result["bytes_written"] == len(b"print('hi')")
-    path_mock.write_text.assert_called_once_with("print('hi')", mkdir_parents=True)
+    assert result["bytes_written"] == len(content.encode())
+    # The command carries the content as base64 and targets the right path.
+    (_, _, command), _ = sprite.run.call_args
+    b64 = base64.b64encode(content.encode()).decode()
+    assert b64 in command
+    assert "base64 -d" in command
+    assert "/app/main.py" in command
 
 
-def test_read_file():
+def test_write_file_rejects_oversize_content():
     plugin, sprite = make_plugin_with_sprite()
-    sprite.filesystem.return_value.path.return_value.read_text.return_value = "data"
+    result = run_tool(
+        tool_by_name(plugin, "write_file_to_sprite"),
+        {"path": "/big", "content": "x" * (256 * 1024 + 1)},
+    )
+    assert result["success"] is False
+    assert "limit" in result["error"]
+    sprite.run.assert_not_called()
+
+
+def test_read_file_decodes_base64():
+    plugin, sprite = make_plugin_with_sprite()
+    sprite.run.return_value = completed(
+        returncode=0, stdout=base64.b64encode(b"file data")
+    )
     result = run_tool(tool_by_name(plugin, "read_file_from_sprite"), {"path": "/app/out.txt"})
-    assert result == {"success": True, "path": "/app/out.txt", "content": "data"}
+    assert result["success"] is True
+    assert result["content"] == "file data"
+    args, _ = sprite.run.call_args
+    assert args == ("base64", "/app/out.txt")
+
+
+def test_read_missing_file_errors():
+    plugin, sprite = make_plugin_with_sprite()
+    sprite.run.return_value = completed(returncode=1, stderr=b"No such file or directory")
+    result = run_tool(tool_by_name(plugin, "read_file_from_sprite"), {"path": "/nope"})
+    assert result["success"] is False
+    assert "No such file" in result["error"]
 
 
 # -- checkpoints ----------------------------------------------------------------
@@ -234,19 +279,24 @@ def _checkpoint(cid, minutes_ago, comment=""):
     )
 
 
-def test_create_checkpoint_reports_newest_id():
+def test_create_checkpoint_parses_id_from_stream():
+    # Mirrors the real progress stream, which reports the new id inline.
     plugin, sprite = make_plugin_with_sprite()
-    sprite.create_checkpoint.return_value = iter([StreamMessage(type="info", data="starting")])
-    sprite.list_checkpoints.return_value = [
-        _checkpoint("cp-old", 60),
-        _checkpoint("cp-new", 0, "before-migration"),
-    ]
+    sprite.create_checkpoint.return_value = iter(
+        [
+            StreamMessage(type="info", data="Creating checkpoint..."),
+            StreamMessage(type="info", data="  ID: v3"),
+            StreamMessage(type="complete", data="Checkpoint v3 created successfully"),
+        ]
+    )
     result = run_tool(
         tool_by_name(plugin, "create_sprite_checkpoint"), {"comment": "before-migration"}
     )
     assert result["success"] is True
-    assert result["checkpoint_id"] == "cp-new"
+    assert result["checkpoint_id"] == "v3"
     sprite.create_checkpoint.assert_called_once_with("before-migration")
+    # id comes from the stream, never from the ambiguous checkpoint list
+    sprite.list_checkpoints.assert_not_called()
 
 
 def test_create_checkpoint_surfaces_stream_errors():
@@ -259,15 +309,17 @@ def test_create_checkpoint_surfaces_stream_errors():
     assert "disk full" in result["error"]
 
 
-def test_list_checkpoints_newest_first():
+def test_list_checkpoints_hides_current_and_orders_by_version():
     plugin, sprite = make_plugin_with_sprite()
     sprite.list_checkpoints.return_value = [
-        _checkpoint("cp-old", 60, "older"),
-        _checkpoint("cp-new", 1, "newer"),
+        _checkpoint("Current", 0),  # synthetic live-state entry, always "newest"
+        _checkpoint("v1", 90, "first"),
+        _checkpoint("v2", 60, "second"),
     ]
     result = run_tool(tool_by_name(plugin, "list_sprite_checkpoints"), {})
     assert result["success"] is True
-    assert [c["checkpoint_id"] for c in result["checkpoints"]] == ["cp-new", "cp-old"]
+    ids = [c["checkpoint_id"] for c in result["checkpoints"]]
+    assert ids == ["v2", "v1"]  # Current filtered out, version-descending
 
 
 def test_restore_requires_confirmation():
