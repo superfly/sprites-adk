@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sprites-adk"
+version = "0.1.0"
+description = "Google ADK plugin for Sprites: persistent, stateful Linux sandboxes with checkpoint/restore for AI agents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Fly.io" }]
+keywords = ["adk", "google-adk", "agents", "sandbox", "sprites", "fly.io", "code-execution"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "google-adk>=1.0.0",
+    "sprites-py>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://sprites.dev"
+Documentation = "https://docs.sprites.dev"
+Repository = "https://github.com/fly-apps/sprites-adk"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sprites_adk"]
