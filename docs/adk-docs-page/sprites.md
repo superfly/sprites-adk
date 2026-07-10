@@ -1,79 +1,85 @@
 ---
 catalog_title: Sprites
-catalog_description: Persistent, stateful Linux sandboxes with checkpoint/restore for agent code execution, by Fly.io
+catalog_description: Persistent, stateful Linux sandboxes with checkpoint and restore for agent code execution
 catalog_icon: /integrations/assets/sprites.png
+catalog_tags: ["code"]
 ---
 
-# Sprites
+# Sprites plugin for ADK
 
-[Sprites](https://sprites.dev) are persistent, stateful Linux sandboxes from [Fly.io](https://fly.io). Unlike ephemeral sandboxes, a Sprite keeps its filesystem, installed packages, and services between sessions — it suspends when idle and resumes in milliseconds. The `sprites-adk` plugin gives ADK agents a full Linux environment with a capability most sandboxes don't have: **checkpoint and restore**, so an agent can snapshot the environment before a risky change and roll back if it goes wrong.
+<div class="language-support-tag">
+  <span class="lst-supported">Supported in ADK</span><span class="lst-python">Python</span>
+</div>
 
-Supported in ADK Python.
+The [Sprites ADK plugin](https://github.com/superfly/sprites-adk) connects your
+ADK agent to [Sprites](https://sprites.dev) — persistent, stateful Linux
+sandboxes from [Fly.io](https://fly.io). Unlike ephemeral sandboxes, a Sprite
+keeps its filesystem, installed packages, and running processes between
+sessions, and it can **checkpoint and restore** its entire state — so your
+agent can snapshot the environment before a risky change and roll back if it
+goes wrong.
 
 ## Use cases
 
-- **Persistent development environments**: a named Sprite is reused across agent sessions — packages installed yesterday are still there today, so long-running projects don't rebuild the world every session.
-- **Secure code execution**: run Python, JavaScript, or bash produced by the model in an isolated microVM instead of the host machine.
-- **Fearless experimentation**: checkpoint the entire environment before package upgrades, migrations, or bulk edits; restore if the experiment breaks it.
-- **File workflows**: write scripts and data into the sandbox, run them, and read results back.
+- **Persistent development environments**: A named Sprite is reused across
+  sessions — packages and files from earlier runs are still there, so
+  long-running projects don't rebuild the environment from scratch each time.
+
+- **Secure code execution**: Run agent-generated Python, JavaScript, or bash in
+  an isolated microVM instead of on the host machine.
+
+- **Fearless experimentation**: Checkpoint the whole environment before package
+  upgrades, migrations, or bulk edits, then restore it if the change breaks
+  things.
+
+- **File workflows**: Write scripts and data into the sandbox, run them, and
+  read the results back.
 
 ## Prerequisites
 
-- A [Sprites account and API token](https://docs.sprites.dev/quickstart/) (`sprite tokens create`), exported as `SPRITES_TOKEN`.
-- A Google API key for the Gemini model used by your agent.
+- A [Sprites](https://sprites.dev) account
+- A Sprites API token (set as the `SPRITES_TOKEN` environment variable)
 
 ## Installation
 
-```sh
+```bash
 pip install sprites-adk
 ```
 
 ## Use with agent
 
 ```python
-from google.adk.agents import Agent
 from sprites_adk import SpritesPlugin
+from google.adk.agents import Agent
 
-# SpritesPlugin() creates an ephemeral sandbox, destroyed on plugin.close().
-# SpritesPlugin(sprite_name="my-project") attaches to a persistent environment
-# that keeps all state between sessions and is never destroyed automatically.
-plugin = SpritesPlugin()
+# SpritesPlugin() gives each run a fresh sandbox; SpritesPlugin(sprite_name="my-project")
+# reuses one persistent environment across sessions.
+plugin = SpritesPlugin(
+  # token="your-sprites-token"  # Or set the SPRITES_TOKEN environment variable
+)
 
 root_agent = Agent(
     model="gemini-flash-latest",
-    name="sprite_agent",
-    instruction=(
-        "Run code and commands inside the Sprite sandbox, not locally. "
-        "Create a checkpoint before risky operations."
-    ),
+    name="sandbox_agent",
+    instruction="Run code and commands in the Sprite sandbox, not locally.",
     tools=plugin.get_tools(),
 )
 ```
 
-For lifecycle callbacks and structured tool-error handling, also register the plugin with your runner:
-
-```python
-from google.adk.runners import InMemoryRunner
-
-runner = InMemoryRunner(agent=root_agent, plugins=[plugin])
-```
-
-The Sprite is created lazily on first tool use. Named Sprites are get-or-create: if a Sprite with that name already exists, the agent attaches to it with all of its state intact.
-
 ## Available tools
 
-| Tool | Description |
-| --- | --- |
-| `execute_command_in_sprite` | Run a shell command with optional working directory and timeout. |
-| `execute_code_in_sprite` | Run a Python, JavaScript, or bash snippet. |
-| `write_file_to_sprite` | Write a text file (parent directories auto-created). |
-| `read_file_from_sprite` | Read a text file from the sandbox. |
-| `create_sprite_checkpoint` | Snapshot the entire environment (filesystem, packages, processes). |
-| `list_sprite_checkpoints` | List checkpoints, newest first. |
-| `restore_sprite_checkpoint` | Roll back to a checkpoint. Destructive — discards newer state and requires explicit `confirm=true`. |
+Tool | Description
+---- | -----------
+`execute_command_in_sprite` | Run a shell command in the sandbox
+`execute_code_in_sprite` | Execute Python, JavaScript, or bash code
+`write_file_to_sprite` | Write a text file into the sandbox
+`read_file_from_sprite` | Read a text file from the sandbox
+`create_sprite_checkpoint` | Snapshot the entire environment (filesystem, packages, processes)
+`list_sprite_checkpoints` | List available checkpoints
+`restore_sprite_checkpoint` | Roll back to a checkpoint (destructive; requires confirmation)
 
-## Resources
+## Additional resources
 
 - [sprites-adk on PyPI](https://pypi.org/project/sprites-adk/)
-- [Source code and examples](https://github.com/superfly/sprites-adk)
+- [sprites-adk on GitHub](https://github.com/superfly/sprites-adk)
 - [Sprites documentation](https://docs.sprites.dev)
