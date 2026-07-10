@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sprites-adk"
-version = "0.1.1"
+version = "0.2.0"
 description = "Google ADK plugin for Sprites: persistent, stateful Linux sandboxes with checkpoint/restore for AI agents."
 readme = "README.md"
 license = { text = "MIT" }
