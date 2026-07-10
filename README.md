@@ -87,6 +87,10 @@ SpritesPlugin(
 - [`examples/persistent_environment.py`](examples/persistent_environment.py) — a named dev environment that survives across sessions
 - [`examples/checkpoint_rollback.py`](examples/checkpoint_rollback.py) — snapshot, break things, roll back
 
+## Attribution
+
+So Fly.io can estimate how much Sprites usage is agent-driven, this plugin declares itself as ADK by setting `FLY_INVOKED_BY=google-adk` (only if unset — an explicit value is never overwritten). Sprites API calls then carry a coarse, privacy-safe [client-signals](https://github.com/superfly/client-signals) marker (`agent=google-adk`). It's advisory only — never used for gating or rate-limiting — and you can opt out by setting `FLY_INVOKED_BY` to your own value.
+
 ## Resources
 
 - [Sprites docs](https://docs.sprites.dev)

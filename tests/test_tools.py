@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +38,25 @@ def tool_by_name(plugin, name):
 
 def run_tool(tool, args):
     return asyncio.run(tool.run_async(args=args, tool_context=MagicMock()))
+
+
+# -- client-signals self-declaration -----------------------------------------
+
+
+def test_declares_google_adk_when_unset():
+    with patch("sprites_adk.plugin.SpritesClient"), patch.dict(
+        "os.environ", {"SPRITES_TOKEN": "t"}, clear=True
+    ):
+        SpritesPlugin()
+        assert os.environ["FLY_INVOKED_BY"] == "google-adk"
+
+
+def test_respects_existing_invoked_by():
+    with patch("sprites_adk.plugin.SpritesClient"), patch.dict(
+        "os.environ", {"SPRITES_TOKEN": "t", "FLY_INVOKED_BY": "cursor"}, clear=True
+    ):
+        SpritesPlugin()
+        assert os.environ["FLY_INVOKED_BY"] == "cursor"  # not clobbered
 
 
 # -- plugin ------------------------------------------------------------------

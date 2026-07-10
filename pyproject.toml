@@ -25,7 +25,9 @@ classifiers = [
 ]
 dependencies = [
     "google-adk>=1.0.0",
-    "sprites-py>=0.2.0",
+    # >=0.3.0 is the first sprites-py with client-signals, so the google-adk
+    # self-declaration below actually reaches the Sprites backend.
+    "sprites-py>=0.3.0",
 ]
 
 [project.urls]
