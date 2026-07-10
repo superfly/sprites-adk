@@ -28,6 +28,11 @@ logger = logging.getLogger("sprites_adk")
 
 _DEFAULT_BASE_URL = "https://api.sprites.dev"
 
+# Cooperative client-signals marker (see github.com/superfly/client-signals):
+# declares this process as driven by Google ADK, so sprites-py attributes its
+# Sprites API calls as agent=google-adk.
+_INVOKED_BY = "google-adk"
+
 
 class SpritesPlugin(BasePlugin):
     """Manages a Sprite sandbox and exposes it to an ADK agent as tools.
@@ -90,6 +95,11 @@ class SpritesPlugin(BasePlugin):
         else:
             self.sprite_name = f"adk-{uuid.uuid4().hex[:8]}"
             self._destroy_on_close = True if destroy_on_close is None else bool(destroy_on_close)
+
+        # Self-declare as ADK-driven before the client is built (client-signals
+        # detection runs on first use and is cached process-wide). setdefault
+        # respects an existing declaration from an outer harness or the user.
+        os.environ.setdefault("FLY_INVOKED_BY", _INVOKED_BY)
 
         self._client = SpritesClient(token=token, base_url=base_url, timeout=client_timeout)
         self._sprite: Optional[Sprite] = None
